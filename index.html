@@ -933,8 +933,96 @@
         });
     });
 
-    /* ========= MATCHES API ========= */
-    const API_URL = 'https://ovogoal.cyou/api/v2/flyembed2.json';
+    /* ========= NEW API: https://trendy48.online/api/matches/all-today ========= */
+    const API_URL = 'https://trendy48.online/api/matches/all-today';
+
+    /* Category display name + icon mapping */
+    const CATEGORY_MAP = {
+        'football':         { label: 'Fútbol',           icon: '⚽' },
+        'american-football':{ label: 'Fútbol Americano', icon: '🏈' },
+        'basketball':       { label: 'Baloncesto',       icon: '🏀' },
+        'baseball':         { label: 'Béisbol',          icon: '⚾' },
+        'hockey':           { label: 'Hockey',           icon: '🏒' },
+        'tennis':           { label: 'Tenis',            icon: '🎾' },
+        'golf':             { label: 'Golf',             icon: '⛳' },
+        'cricket':          { label: 'Cricket',          icon: '🏏' },
+        'rugby':            { label: 'Rugby',            icon: '🏉' },
+        'motor-sports':     { label: 'Motor',            icon: '🏎️' },
+        'boxing':           { label: 'Boxeo',            icon: '🥊' },
+        'ufc':              { label: 'UFC',              icon: '🥊' },
+        'mma':              { label: 'MMA',              icon: '🥊' },
+        'other':            { label: 'Otros',            icon: '🏆' }
+    };
+
+    function getCategoryInfo(cat) {
+        const key = (cat || '').toLowerCase();
+        return CATEGORY_MAP[key] || { label: cat || 'Deporte', icon: '🏆' };
+    }
+
+    /* Parse "Team1 vs Team2" from title */
+    function parseTeams(title) {
+        if (!title) return { team1: 'Equipo 1', team2: 'Equipo 2' };
+        // Try " vs " separator (case-insensitive)
+        const vsMatch = title.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+        if (vsMatch) {
+            return {
+                team1: vsMatch[1].trim(),
+                team2: vsMatch[2].trim()
+            };
+        }
+        // Fallback: if title has " - ", use that
+        const dashMatch = title.match(/^(.+?)\s+-\s+(.+)$/);
+        if (dashMatch) {
+            return {
+                team1: dashMatch[1].trim(),
+                team2: dashMatch[2].trim()
+            };
+        }
+        // Last resort: single team name
+        return { team1: title.trim(), team2: '—' };
+    }
+
+    /* Format timestamp (ms) -> "HH:MM" */
+    function formatTime(ts) {
+        if (!ts || ts <= 0) return 'En vivo';
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return '--:--';
+        const h = String(d.getHours()).padStart(2, '0');
+        const m = String(d.getMinutes()).padStart(2, '0');
+        return h + ':' + m;
+    }
+
+    /* Format timestamp (ms) -> "DD/MM" */
+    function formatDate(ts) {
+        if (!ts || ts <= 0) return '';
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return '';
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        return day + '/' + month;
+    }
+
+    /* Normalize an API item into a consistent shape */
+    function normalizeMatch(item) {
+        const teams = parseTeams(item.title || '');
+        const catInfo = getCategoryInfo(item.category);
+        const ts = item.date || 0;
+        return {
+            id:          item.id || '',
+            title:       item.title || '',
+            category:    item.category || 'other',
+            categoryLabel: catInfo.label,
+            categoryIcon:  catInfo.icon,
+            team1:       teams.team1,
+            team2:       teams.team2,
+            time:        formatTime(ts),
+            date:        formatDate(ts),
+            timestamp:   ts,
+            popular:     !!item.popular,
+            watchUrl:    item.watch_url || '#'
+        };
+    }
+
     let allMatches = [];
     let currentFilter = 'all';
 
@@ -943,7 +1031,8 @@
             const res = await fetch(API_URL, { cache: 'no-store' });
             if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            allMatches = Array.isArray(data) ? data : [];
+            if (!Array.isArray(data)) throw new Error('Invalid data format');
+            allMatches = data.map(normalizeMatch);
             buildFilters(allMatches);
             renderMatches(allMatches, currentFilter);
         } catch (err) {
@@ -954,7 +1043,7 @@
     }
 
     function buildFilters(matches) {
-        const sports = [...new Set(matches.map(m => m.Sport))].filter(Boolean).sort();
+        const cats = [...new Set(matches.map(m => m.category))].filter(Boolean).sort();
         const box = document.getElementById('filtersContainer');
         box.innerHTML = '';
         const mkBtn = (label, val) => {
@@ -966,7 +1055,10 @@
             box.appendChild(b);
         };
         mkBtn('Todos los deportes', 'all');
-        sports.forEach(s => mkBtn(s, s));
+        cats.forEach(c => {
+            const info = getCategoryInfo(c);
+            mkBtn(info.icon + ' ' + info.label, c);
+        });
     }
 
     function setFilter(val) {
@@ -979,62 +1071,62 @@
 
     function renderMatches(matches, filterSport) {
         const container = document.getElementById('matchesContainer');
-        const filtered = filterSport === 'all' ? matches : matches.filter(m => m.Sport === filterSport);
+        const filtered = filterSport === 'all'
+            ? matches
+            : matches.filter(m => m.category === filterSport);
+
         if (!filtered.length) {
             container.innerHTML = '<div class="no-matches">No hay partidos en esta categoría.</div>';
             return;
         }
+
+        /* Group by category */
         const map = new Map();
         filtered.forEach(m => {
-            const league = m.League || 'Liga desconocida';
-            if (!map.has(league)) {
-                map.set(league, { name: league, logo: m.LeagueLogo || '', matches: [] });
+            const cat = m.category || 'other';
+            if (!map.has(cat)) {
+                const info = getCategoryInfo(cat);
+                map.set(cat, { name: cat, label: info.label, icon: info.icon, matches: [] });
             }
-            map.get(league).matches.push(m);
+            map.get(cat).matches.push(m);
         });
-        const leagues = [...map.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+        const categories = [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
 
         let html = '';
-        leagues.forEach(lg => {
+        categories.forEach(cat => {
             html += `<div class="league-section">`;
             html += `<div class="league-header">`;
-            if (lg.logo) html += `<img src="${lg.logo}" alt="${escapeHtml(lg.name)}" onerror="this.style.display='none'">`;
-            html += `<h2>${escapeHtml(lg.name)}</h2></div>`;
-            lg.matches.sort((a, b) => {
-                const da = new Date((a.MatchDate || '') + 'T' + (a.MatchStartTime || '00:00'));
-                const db = new Date((b.MatchDate || '') + 'T' + (b.MatchStartTime || '00:00'));
-                return da - db;
+            html += `<span style="font-size:1.6rem;line-height:1;">${cat.icon}</span>`;
+            html += `<h2>${escapeHtml(cat.label)}</h2>`;
+            html += `</div>`;
+
+            // Sort by timestamp (live events = 0 first)
+            cat.matches.sort((a, b) => {
+                const ta = a.timestamp <= 0 ? -1 : a.timestamp;
+                const tb = b.timestamp <= 0 ? -1 : b.timestamp;
+                return ta - tb;
             });
-            lg.matches.forEach(m => { html += cardHtml(m); });
+
+            cat.matches.forEach(m => { html += cardHtml(m); });
             html += `</div>`;
         });
+
         container.innerHTML = html;
     }
 
     function cardHtml(m) {
-        const t1 = escapeHtml(m.Team1 || 'Equipo 1');
-        const t2 = escapeHtml(m.Team2 || 'Equipo 2');
-        const l1 = m.Team1Logo || 'https://via.placeholder.com/50?text=?';
-        const l2 = m.Team2Logo || 'https://via.placeholder.com/50?text=?';
-        const time = escapeHtml(m.MatchStartTime || '--:--');
-        const league = escapeHtml(m.League || '');
-
-        const watchUrl = 'watch.html'
-            + '?team1=' + encodeURIComponent(m.Team1 || '')
-            + '&team2=' + encodeURIComponent(m.Team2 || '')
-            + '&logo1=' + encodeURIComponent(m.Team1Logo || '')
-            + '&logo2=' + encodeURIComponent(m.Team2Logo || '')
-            + '&time=' + encodeURIComponent(m.MatchStartTime || '')
-            + '&date=' + encodeURIComponent(m.MatchDate || '')
-            + '&league=' + encodeURIComponent(m.League || '')
-            + '&leagueLogo=' + encodeURIComponent(m.LeagueLogo || '')
-            + '&url=' + encodeURIComponent(m.IframeURL || '');
+        const t1 = escapeHtml(m.team1);
+        const t2 = escapeHtml(m.team2);
+        const time = escapeHtml(m.time);
+        const league = escapeHtml(m.categoryLabel);
+        const watchUrl = m.watchUrl || '#';
 
         return `
             <div class="match-card">
-                <a href="${watchUrl}">
+                <a href="${watchUrl}" target="_blank" rel="noopener noreferrer">
                     <div class="team">
-                        <img src="${l1}" alt="${t1}" onerror="this.src='https://via.placeholder.com/50?text=?'">
+                        <div style="width:50px;height:50px;border-radius:50%;background:#0d0d0d;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:5px;">${m.categoryIcon || '🏆'}</div>
                         <span>${t1}</span>
                     </div>
                     <div class="match-info">
@@ -1042,7 +1134,7 @@
                         <div class="match-league-name">${league}</div>
                     </div>
                     <div class="team">
-                        <img src="${l2}" alt="${t2}" onerror="this.src='https://via.placeholder.com/50?text=?'">
+                        <div style="width:50px;height:50px;border-radius:50%;background:#0d0d0d;border:1px solid #2a2a2a;display:flex;align-items:center;justify-content:center;font-size:1.4rem;margin-bottom:5px;">${m.categoryIcon || '🏆'}</div>
                         <span>${t2}</span>
                     </div>
                 </a>
